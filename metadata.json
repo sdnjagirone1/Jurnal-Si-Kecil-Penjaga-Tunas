@@ -1,0 +1,6 @@
+{
+  "name": "Media Pembelajaran Interaktif Kelas 1 SDN Jagir I/393 Surabaya",
+  "description": "Si Kecil Penjaga Tunas - Media Pembelajaran Interaktif (MPI) untuk siswa Kelas 1 SD SDN Jagir I/393 Surabaya dalam mengamati, mengukur, dan mencatat pertumbuhan tanaman kangkung setiap hari.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
