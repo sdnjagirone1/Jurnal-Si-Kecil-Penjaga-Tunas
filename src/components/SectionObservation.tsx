@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { GROUPS_DATA, GroupInfo, JournalDay } from '../types';
 import { sound } from '../utils/audio';
+import { sheetService } from '../utils/sheetService';
 import confetti from 'canvas-confetti';
 
 interface SectionObservationProps {
@@ -19,6 +20,7 @@ interface SectionObservationProps {
       notes: string;
       condition?: string;
       conditionEmoji?: string;
+      heightCm?: number | string;
     }
   ) => void;
   onAddStar?: () => void;
@@ -42,8 +44,10 @@ export const SectionObservation: React.FC<SectionObservationProps> = ({
   const [looksFresh, setLooksFresh] = useState<boolean>(true);
   const [hasYellowLeaves, setHasYellowLeaves] = useState<boolean>(false);
   const [plantCondition, setPlantCondition] = useState<string>('');
+  const [observedHeight, setObservedHeight] = useState<string>('');
   const [dailyNotes, setDailyNotes] = useState<string>('');
-  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState<string | null>(null);
+  const [syncingToSheet, setSyncingToSheet] = useState<boolean>(false);
 
   // Sync state from journalData whenever selectedDay or currentGroupId changes
   useEffect(() => {
@@ -56,6 +60,7 @@ export const SectionObservation: React.FC<SectionObservationProps> = ({
       setLooksFresh(dayData.looksFresh ?? true);
       setHasYellowLeaves(dayData.hasYellowLeaves ?? false);
       setPlantCondition(dayData.condition || '');
+      setObservedHeight(dayData.heightCm !== '' && dayData.heightCm !== undefined ? String(dayData.heightCm) : '');
       setDailyNotes(dayData.notes || '');
     }
   }, [selectedDay, currentGroupId, journalData]);
@@ -74,7 +79,7 @@ export const SectionObservation: React.FC<SectionObservationProps> = ({
     setDailyNotes((prev) => (prev ? `${prev} ${stickerText}` : stickerText));
   };
 
-  const handleSaveObservation = () => {
+  const handleSaveObservation = async () => {
     sound.playStar();
     confetti({
       particleCount: 35,
@@ -117,6 +122,10 @@ export const SectionObservation: React.FC<SectionObservationProps> = ({
       }
     }
 
+    // Bersihkan nilai tinggi: dukung format koma desimal khas Indonesia (misal: "2,5")
+    const cleanHeightStr = observedHeight.trim().replace(',', '.').replace(/[^0-9.]/g, '');
+    const cleanHeightNum = cleanHeightStr !== '' ? parseFloat(cleanHeightStr) : '';
+
     onUpdateJournalObservation(selectedDay, {
       hasNewLeaves,
       grewTaller,
@@ -127,11 +136,46 @@ export const SectionObservation: React.FC<SectionObservationProps> = ({
       notes: dailyNotes,
       condition,
       conditionEmoji,
+      heightCm: cleanHeightNum !== '' && !isNaN(cleanHeightNum as number) ? (cleanHeightNum as number) : undefined,
     });
 
     if (onAddStar) onAddStar();
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3500);
+
+    // Otomatis sinkronkan ke Google Sheets jika URL telah terpasang
+    if (sheetService.isConfigured()) {
+      setSyncingToSheet(true);
+      const existing = journalData.find((d) => d.dayNumber === selectedDay);
+      const dayToSync: JournalDay = {
+        ...(existing || {
+          dayNumber: selectedDay,
+          label: `Hari ${selectedDay}`,
+          date: new Date().toISOString().split('T')[0],
+          heightCm: '',
+        }),
+        condition,
+        conditionEmoji,
+        notes: dailyNotes,
+        hasNewLeaves,
+        grewTaller,
+        greenLeaves,
+        looksFresh,
+        hasYellowLeaves,
+        seedNotSprouted,
+        ...(cleanHeightNum !== '' && !isNaN(cleanHeightNum as number) ? { heightCm: cleanHeightNum as number } : {}),
+      };
+
+      const res = await sheetService.syncDay(currentGroupId, dayToSync);
+      setSyncingToSheet(false);
+      if (res.success) {
+        setSavedSuccess(`🎉 Pengamatan & tinggi Hari ke-${selectedDay} ${activeGroup.name} tersimpan ke Jurnal & Google Sheets! ☁️⭐`);
+      } else {
+        setSavedSuccess(`Tersimpan di jurnal lokal. (Status Sheet: ${res.message})`);
+      }
+    } else {
+      setSavedSuccess(`🎉 Hebat! Lembar pengamatan Hari ke-${selectedDay} ${activeGroup.name} berhasil tersinkron dengan Buku Jurnal! ⭐`);
+    }
+
+    setTimeout(() => setSavedSuccess(null), 4000);
   };
 
   const handleReadGuide = () => {
@@ -395,19 +439,47 @@ export const SectionObservation: React.FC<SectionObservationProps> = ({
 
           {/* Daily Notes & Manual Condition Input */}
           <div className="bg-purple-50/60 rounded-3xl p-6 sm:p-8 border-2 border-purple-200 mb-8 space-y-5">
-            {/* Input Kondisi Tanaman (Ketik Manual) */}
-            <div>
-              <label className="block text-sm sm:text-base font-bold text-slate-800 font-fun mb-1.5 flex items-center gap-2">
-                <span>🌱</span>
-                <span>Kondisi Tanaman (Ketik Manual oleh Siswa):</span>
-              </label>
-              <input
-                type="text"
-                value={plantCondition}
-                onChange={(e) => setPlantCondition(e.target.value)}
-                placeholder="Ketik kondisi kangkung di sini (misal: Daun hijau segar, tumbuh tunas, segar sekali)..."
-                className="w-full bg-white border-2 border-purple-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 rounded-2xl px-4 py-2.5 font-semibold text-slate-800 text-sm sm:text-base placeholder:text-slate-400 shadow-2xs transition-all"
-              />
+            {/* Grid 2 Kolom: Kondisi & Tinggi Tanaman */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+              {/* Input Kondisi Tanaman (Ketik Manual) */}
+              <div className="md:col-span-8">
+                <label className="block text-sm sm:text-base font-bold text-slate-800 font-fun mb-1.5 flex items-center gap-2">
+                  <span>🌱</span>
+                  <span>Kondisi Tanaman (Ketik Manual oleh Siswa):</span>
+                </label>
+                <input
+                  type="text"
+                  value={plantCondition}
+                  onChange={(e) => setPlantCondition(e.target.value)}
+                  placeholder="Ketik kondisi kangkung di sini (misal: Daun hijau segar, tumbuh tunas, segar sekali)..."
+                  className="w-full bg-white border-2 border-purple-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 rounded-2xl px-4 py-2.5 font-semibold text-slate-800 text-sm sm:text-base placeholder:text-slate-400 shadow-2xs transition-all"
+                />
+              </div>
+
+              {/* Input Tinggi Tanaman Hari Ini (cm) */}
+              <div className="md:col-span-4">
+                <label className="block text-sm sm:text-base font-bold text-slate-800 font-fun mb-1.5 flex items-center gap-2">
+                  <span>📏</span>
+                  <span>Tinggi Hari Ini:</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={observedHeight}
+                    onChange={(e) => {
+                      const withDot = e.target.value.replace(',', '.');
+                      const sanitized = withDot.replace(/[^0-9.]/g, '');
+                      setObservedHeight(sanitized);
+                    }}
+                    placeholder="Misal: 7.5"
+                    className="w-full bg-white border-2 border-purple-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 rounded-2xl px-4 py-2.5 font-extrabold text-slate-800 text-sm sm:text-base placeholder:text-slate-400 shadow-2xs transition-all text-center pr-12"
+                  />
+                  <span className="absolute right-3.5 top-2.5 text-xs font-bold text-purple-700 pointer-events-none">
+                    cm
+                  </span>
+                </div>
+              </div>
             </div>
 
             {/* Catatan Tambahan */}
@@ -448,15 +520,20 @@ export const SectionObservation: React.FC<SectionObservationProps> = ({
           <div className="text-center flex flex-col items-center">
             <button
               onClick={handleSaveObservation}
-              className="px-8 py-4 bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-extrabold text-base sm:text-lg rounded-2xl shadow-xl transition-all active:scale-95 cursor-pointer font-fun flex items-center gap-2"
+              disabled={syncingToSheet}
+              className="px-8 py-4 bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-extrabold text-base sm:text-lg rounded-2xl shadow-xl transition-all active:scale-95 cursor-pointer font-fun flex items-center gap-2 disabled:opacity-75"
             >
-              <span>⭐</span>
-              <span>Simpan Ceklis ke Jurnal {activeGroup.name} (Hari {selectedDay})</span>
+              <span>{syncingToSheet ? '⏳' : '⭐'}</span>
+              <span>
+                {syncingToSheet
+                  ? 'Menyimpan ke Google Sheets...'
+                  : `Simpan Pengamatan ke Jurnal & Database (Hari ${selectedDay})`}
+              </span>
             </button>
 
             {savedSuccess && (
               <div className="mt-4 p-4 bg-emerald-100 border-2 border-emerald-300 text-emerald-950 font-bold rounded-2xl text-center text-sm sm:text-base animate-bounce max-w-lg">
-                🎉 Hebat! Lembar pengamatan Hari ke-{selectedDay} {activeGroup.name} berhasil tersinkron dengan Buku Jurnal! ⭐
+                {savedSuccess}
               </div>
             )}
           </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { GROUPS_DATA, GroupInfo, JournalDay } from '../types';
 import { sound } from '../utils/audio';
+import { sheetService } from '../utils/sheetService';
 import confetti from 'canvas-confetti';
 
 interface SectionMeasureProps {
@@ -22,6 +23,7 @@ export const SectionMeasure: React.FC<SectionMeasureProps> = ({
   const [selectedDay, setSelectedDay] = useState<number>(1);
   const [measuredHeight, setMeasuredHeight] = useState<number>(7.5);
   const [appliedToast, setAppliedToast] = useState<string | null>(null);
+  const [syncingToSheet, setSyncingToSheet] = useState<boolean>(false);
 
   // When selectedDay or currentGroupId changes, sync measuredHeight from journalData if already set
   useEffect(() => {
@@ -37,7 +39,7 @@ export const SectionMeasure: React.FC<SectionMeasureProps> = ({
     sound.playPop();
   };
 
-  const handleApply = () => {
+  const handleApply = async () => {
     sound.playStar();
     confetti({
       particleCount: 25,
@@ -48,10 +50,44 @@ export const SectionMeasure: React.FC<SectionMeasureProps> = ({
 
     onUpdateJournalHeight(selectedDay, measuredHeight);
 
-    setAppliedToast(
-      `Tinggi ${measuredHeight} cm berhasil disimpan ke Buku Jurnal ${activeGroup.name} (Hari ${selectedDay})! ⭐`
-    );
-    setTimeout(() => setAppliedToast(null), 3500);
+    // Otomatis sinkronkan tinggi tanaman ke Google Sheets jika URL sudah dikonfigurasi
+    if (sheetService.isConfigured()) {
+      setSyncingToSheet(true);
+      const existing = journalData.find((d) => d.dayNumber === selectedDay);
+      const dayToSync: JournalDay = existing
+        ? { ...existing, heightCm: measuredHeight }
+        : {
+            dayNumber: selectedDay,
+            label: `Hari ${selectedDay}`,
+            date: new Date().toISOString().split('T')[0],
+            heightCm: measuredHeight,
+            condition: 'Sehat',
+            conditionEmoji: '🌱',
+            notes: 'Diukur dari simulasi penggaris',
+            grewTaller: true,
+            greenLeaves: true,
+            looksFresh: true,
+          };
+
+      const res = await sheetService.syncDay(currentGroupId, dayToSync);
+      setSyncingToSheet(false);
+
+      if (res.success) {
+        setAppliedToast(
+          `Tinggi ${measuredHeight} cm berhasil disimpan ke Buku Jurnal & Google Sheets ${activeGroup.name} (Hari ${selectedDay})! ☁️⭐`
+        );
+      } else {
+        setAppliedToast(
+          `Tinggi ${measuredHeight} cm tersimpan di Buku Jurnal lokal! (${res.message})`
+        );
+      }
+    } else {
+      setAppliedToast(
+        `Tinggi ${measuredHeight} cm berhasil disimpan ke Buku Jurnal ${activeGroup.name} (Hari ${selectedDay})! ⭐`
+      );
+    }
+
+    setTimeout(() => setAppliedToast(null), 4000);
   };
 
   const handleReadGuide = () => {
@@ -276,13 +312,18 @@ export const SectionMeasure: React.FC<SectionMeasureProps> = ({
                 </div>
               </div>
 
-              {/* Transfer to Journal Button */}
+              {/* Transfer to Journal & Database Button */}
               <button
                 onClick={handleApply}
-                className="w-full py-4 bg-gradient-to-r from-indigo-500 via-indigo-600 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white font-extrabold text-base rounded-2xl shadow-md transition-all active:scale-95 cursor-pointer font-fun flex items-center justify-center gap-2"
+                disabled={syncingToSheet}
+                className="w-full py-4 bg-gradient-to-r from-indigo-500 via-indigo-600 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white font-extrabold text-base rounded-2xl shadow-md transition-all active:scale-95 cursor-pointer font-fun flex items-center justify-center gap-2 disabled:opacity-75"
               >
-                <span>💾</span>
-                <span>Simpan ke Jurnal {activeGroup.name} (Hari {selectedDay})</span>
+                <span>{syncingToSheet ? '⏳' : '💾'}</span>
+                <span>
+                  {syncingToSheet
+                    ? 'Menyimpan ke Google Sheets...'
+                    : `Simpan ke Jurnal & Database ${activeGroup.name} (Hari ${selectedDay})`}
+                </span>
               </button>
 
               {appliedToast && (

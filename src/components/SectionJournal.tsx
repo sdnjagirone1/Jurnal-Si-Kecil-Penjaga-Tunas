@@ -76,8 +76,12 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
   };
 
   const handleHeightChange = (dayNumber: number, val: string) => {
-    const sanitized = val.replace(/[^0-9.]/g, '');
-    onUpdateDay(dayNumber, 'heightCm', sanitized);
+    // Dukung tanda koma desimal khas Indonesia (misal: "2,5" -> "2.5")
+    const withDot = val.replace(',', '.');
+    const sanitized = withDot.replace(/[^0-9.]/g, '');
+    const parts = sanitized.split('.');
+    const clean = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : sanitized;
+    onUpdateDay(dayNumber, 'heightCm', clean);
     sound.playPop();
   };
 
@@ -95,7 +99,7 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
     sound.playStar();
   };
 
-  const handleSaveAll = () => {
+  const handleSaveAll = async () => {
     sound.playStar();
     confetti({
       particleCount: 35,
@@ -105,6 +109,22 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
     });
     setSaveToast(true);
     setTimeout(() => setSaveToast(false), 3000);
+
+    // Otomatis sinkronkan tinggi tanaman & data jurnal ke Google Sheets jika URL telah terpasang
+    if (sheetService.isConfigured()) {
+      setSyncingToSheet(true);
+      const res = await sheetService.syncGroup(currentGroupId, journalData);
+      setSyncingToSheet(false);
+      if (res.success) {
+        setSheetToast({
+          type: 'success',
+          message: `✅ Tinggi tanaman & data jurnal ${activeGroup.name} berhasil tersimpan ke Google Sheets!`,
+        });
+      } else {
+        setSheetToast({ type: 'error', message: `⚠️ ${res.message}` });
+      }
+      setTimeout(() => setSheetToast(null), 5000);
+    }
   };
 
   return (

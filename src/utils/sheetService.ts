@@ -2,6 +2,21 @@ import { JournalDay, LkpdData } from '../types';
 
 const STORAGE_KEY_URL = 'kangkung_gas_webapp_url';
 
+function cleanJournalDays(days: JournalDay[]): JournalDay[] {
+  return days.map((d) => {
+    let cleanHeight: number | string = d.heightCm;
+    if (typeof cleanHeight === 'string') {
+      const trimmed = cleanHeight.trim().replace(',', '.');
+      const num = parseFloat(trimmed);
+      cleanHeight = !isNaN(num) ? num : trimmed;
+    }
+    return {
+      ...d,
+      heightCm: cleanHeight,
+    };
+  });
+}
+
 export const sheetService = {
   // Get configured Web App URL from localStorage
   getWebAppUrl(): string {
@@ -65,6 +80,62 @@ export const sheetService = {
     }
   },
 
+  // Sync a single day observation to Google Sheets
+  async syncDay(groupId: number, day: JournalDay): Promise<{ success: boolean; message: string }> {
+    const url = this.getWebAppUrl();
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        message: 'Google Apps Script belum dikonfigurasi.',
+      };
+    }
+
+    const cleanDay = cleanJournalDays([day])[0];
+    const payload = {
+      action: 'syncDay',
+      groupId,
+      day: cleanDay,
+    };
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const resJson = await response.json();
+      return {
+        success: resJson.status === 'success',
+        message: resJson.message || `Hari ke-${day.dayNumber} berhasil disimpan ke Google Sheets!`,
+      };
+    } catch {
+      try {
+        const fallbackUrl = `${url}${url.includes('?') ? '&' : '?'}action=syncDay&data=${encodeURIComponent(
+          JSON.stringify(payload)
+        )}&_t=${Date.now()}`;
+        const fallbackRes = await fetch(fallbackUrl, { method: 'GET' });
+        const resJson = await fallbackRes.json();
+        return {
+          success: resJson.status === 'success',
+          message: resJson.message || `Hari ke-${day.dayNumber} berhasil disimpan ke Google Sheets!`,
+        };
+      } catch (fallbackErr: unknown) {
+        const errStr = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        return {
+          success: false,
+          message: `Gagal mengirim ke Google Sheets: ${errStr}`,
+        };
+      }
+    }
+  },
+
   // Sync one group's 15-day journal to Google Sheets
   async syncGroup(groupId: number, days: JournalDay[]): Promise<{ success: boolean; message: string }> {
     const url = this.getWebAppUrl();
@@ -78,7 +149,7 @@ export const sheetService = {
     const payload = {
       action: 'syncGroup',
       groupId,
-      days,
+      days: cleanJournalDays(days),
     };
 
     try {
@@ -132,9 +203,15 @@ export const sheetService = {
       };
     }
 
+    const cleanedAll: Record<number, JournalDay[]> = {};
+    Object.keys(allJournals).forEach((k) => {
+      const gId = Number(k);
+      cleanedAll[gId] = cleanJournalDays(allJournals[gId] || []);
+    });
+
     const payload = {
       action: 'syncAll',
-      data: allJournals,
+      data: cleanedAll,
     };
 
     try {

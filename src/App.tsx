@@ -260,6 +260,7 @@ export default function App() {
       notes: string;
       condition?: string;
       conditionEmoji?: string;
+      heightCm?: number | string;
     }
   ) => {
     setGroupJournals((prev) => {
@@ -277,6 +278,7 @@ export default function App() {
               notes: data.notes,
               condition: data.condition || d.condition || 'Sehat',
               conditionEmoji: data.conditionEmoji || d.conditionEmoji || '🌱',
+              ...(data.heightCm !== undefined && data.heightCm !== '' ? { heightCm: data.heightCm } : {}),
             }
           : d
       );
