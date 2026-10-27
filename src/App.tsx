@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { PageId, JournalDay, LkpdData, GROUPS_DATA } from './types';
 import { sound } from './utils/audio';
+import { normalizeDateToYMD } from './utils/sheetService';
 import { Navigation } from './components/Navigation';
 import { SectionHero } from './components/SectionHero';
 import { SectionAboutKangkung } from './components/SectionAboutKangkung';
@@ -14,56 +15,7 @@ import { SectionQuizThink } from './components/SectionQuizThink';
 import { SectionStarProgress } from './components/SectionStarProgress';
 import { GoogleSheetModal } from './components/GoogleSheetModal';
 
-// Helper to generate 15 blank observation days
-const generateBlankDays = (): JournalDay[] => {
-  const today = new Date();
-  const days: JournalDay[] = [];
-  for (let i = 1; i <= 15; i++) {
-    const d = new Date(today);
-    d.setDate(today.getDate() + (i - 1));
-    const dateStr = d.toISOString().split('T')[0];
-    days.push({
-      dayNumber: i,
-      label: `Hari ${i}`,
-      date: dateStr,
-      heightCm: '',
-      condition: '',
-      conditionEmoji: '',
-      notes: '',
-      hasNewLeaves: false,
-      grewTaller: false,
-      greenLeaves: true,
-      looksFresh: true,
-      hasYellowLeaves: false,
-    });
-  }
-  return days;
-};
-
-// Helper to generate blank LKPD 1 for a group
-const generateBlankLkpd = (groupId: number): LkpdData => {
-  const g = GROUPS_DATA.find((grp) => grp.id === groupId) || GROUPS_DATA[0];
-  return {
-    groupId: g.id,
-    groupName: g.name,
-    members: g.members.join(', '),
-    tasks: {
-      wadahMedia: false,
-      lubangKecil: false,
-      letakBiji: false,
-      tutupMedia: false,
-      siramSecukupnya: false,
-      labelNama: false,
-    },
-    drawingDataUrl: '',
-    prediction: '',
-    reflection: {
-      senang: false,
-      bekerjaSama: false,
-      siapMerawat: false,
-    },
-  };
-};
+import { generateBlankDays, ensure15Days, generateBlankLkpd } from './utils/journalUtils';
 
 // Realistic sample 15-day kangkung growth progression (starting from seed to mature plant)
 const SAMPLE_15_DAYS: JournalDay[] = [
@@ -94,23 +46,29 @@ export default function App() {
 
   // Group Journals: Record<number, JournalDay[]> stored in localStorage
   const [groupJournals, setGroupJournals] = useState<Record<number, JournalDay[]>>(() => {
+    // 1. Awali dengan menyiapkan 15 hari lengkap untuk seluruh 5 kelompok
+    const result: Record<number, JournalDay[]> = {};
+    GROUPS_DATA.forEach((g) => {
+      result[g.id] = generateBlankDays();
+    });
+
     const saved = localStorage.getItem('kangkung_all_group_journals_v5');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object' && parsed[1]) {
-          return parsed;
+        if (parsed && typeof parsed === 'object') {
+          GROUPS_DATA.forEach((g) => {
+            const raw = parsed[g.id] ?? parsed[String(g.id)];
+            if (Array.isArray(raw) && raw.length > 0) {
+              result[g.id] = ensure15Days(raw);
+            }
+          });
         }
       } catch {
-        // ignore
+        // abaikan kesalahan json parsing
       }
     }
-    // Default initial for all 5 groups: All blank, no pre-filled data
-    const initial: Record<number, JournalDay[]> = {};
-    GROUPS_DATA.forEach((g) => {
-      initial[g.id] = generateBlankDays();
-    });
-    return initial;
+    return result;
   });
 
   // Sync to localStorage
@@ -152,7 +110,8 @@ export default function App() {
     sound.speechEnabled = speechOn;
   }, [speechOn]);
 
-  const activeJournalData = groupJournals[currentGroupId] || generateBlankDays();
+  // Selalu pastikan kelompok aktif memiliki 15 baris pengamatan (Hari 1 s/d Hari 15)
+  const activeJournalData = ensure15Days(groupJournals[currentGroupId]);
 
   // Compute total stars: filled days across the current active group + bonus stars
   const filledDaysCount = activeJournalData.filter(
@@ -214,7 +173,7 @@ export default function App() {
   // Handler: direct update inside the active group's journal table
   const handleUpdateDay = (dayNumber: number, field: keyof JournalDay, value: string | number | boolean) => {
     setGroupJournals((prev) => {
-      const currentList = prev[currentGroupId] || generateBlankDays();
+      const currentList = ensure15Days(prev[currentGroupId]);
       const updatedList = currentList.map((d) =>
         d.dayNumber === dayNumber ? { ...d, [field]: value } : d
       );
@@ -228,7 +187,7 @@ export default function App() {
   // Handler: synchronizing Section 5 (Simulasi Pengukuran) to active group's journal
   const handleUpdateJournalHeight = (dayNumber: number, heightCm: number) => {
     setGroupJournals((prev) => {
-      const currentList = prev[currentGroupId] || generateBlankDays();
+      const currentList = ensure15Days(prev[currentGroupId]);
       const updatedList = currentList.map((d) =>
         d.dayNumber === dayNumber
           ? {
@@ -264,7 +223,7 @@ export default function App() {
     }
   ) => {
     setGroupJournals((prev) => {
-      const currentList = prev[currentGroupId] || generateBlankDays();
+      const currentList = ensure15Days(prev[currentGroupId]);
       const updatedList = currentList.map((d) =>
         d.dayNumber === dayNumber
           ? {
@@ -350,6 +309,7 @@ export default function App() {
           currentGroupId={currentGroupId}
           onSelectGroup={setCurrentGroupId}
           journalData={activeJournalData}
+          allGroupJournals={groupJournals}
           onUpdateDay={handleUpdateDay}
           onLoadSample={handleLoadSample}
           onResetData={handleResetData}
@@ -442,7 +402,22 @@ export default function App() {
         isOpen={isSheetModalOpen}
         onClose={() => setIsSheetModalOpen(false)}
         allGroupJournals={groupJournals}
-        onApplyImportedData={(imported) => setGroupJournals(imported)}
+        onApplyImportedData={(imported) => {
+          setGroupJournals((prev) => {
+            const merged: Record<number, JournalDay[]> = {};
+            GROUPS_DATA.forEach((g) => {
+              const imp = imported[g.id] || imported[Number(g.id)];
+              if (Array.isArray(imp) && imp.length > 0) {
+                merged[g.id] = ensure15Days(imp);
+              } else if (prev[g.id] && prev[g.id].length > 0) {
+                merged[g.id] = ensure15Days(prev[g.id]);
+              } else {
+                merged[g.id] = generateBlankDays();
+              }
+            });
+            return merged;
+          });
+        }}
         allGroupLkpd={groupLkpd}
         onApplyImportedLkpd={(importedLkpd) => setGroupLkpd(importedLkpd)}
       />

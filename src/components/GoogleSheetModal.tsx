@@ -628,6 +628,71 @@ function parsePlantHeight(val) {
   return !isNaN(num) ? num : '';
 }
 
+function formatDateToYMD(val) {
+  if (val === null || val === undefined || val === '') return '';
+  if (Object.prototype.toString.call(val) === '[object Date]' || val instanceof Date) {
+    if (isNaN(val.getTime())) return '';
+    try {
+      return Utilities.formatDate(val, Session.getScriptTimeZone() || 'Asia/Jakarta', 'yyyy-MM-dd');
+    } catch (e) {
+      var yr = val.getFullYear();
+      var mo = (val.getMonth() + 1 < 10 ? '0' : '') + (val.getMonth() + 1);
+      var da = (val.getDate() < 10 ? '0' : '') + val.getDate();
+      return yr + '-' + mo + '-' + da;
+    }
+  }
+  var str = String(val).trim();
+  if (!str) return '';
+
+  // 1. Format strip: 2026-09-22 atau 22-09-2026
+  if (str.indexOf('-') !== -1) {
+    var partsDash = str.split('T')[0].split(' ')[0].split('-');
+    if (partsDash.length === 3) {
+      if (partsDash[0].length === 4) {
+        var y1 = partsDash[0];
+        var m1 = partsDash[1].length === 1 ? '0' + partsDash[1] : partsDash[1];
+        var d1 = partsDash[2].length === 1 ? '0' + partsDash[2] : partsDash[2];
+        return y1 + '-' + m1 + '-' + d1;
+      }
+      if (partsDash[2].length === 4) {
+        var d2 = partsDash[0].length === 1 ? '0' + partsDash[0] : partsDash[0];
+        var m2 = partsDash[1].length === 1 ? '0' + partsDash[1] : partsDash[1];
+        var y2 = partsDash[2];
+        return y2 + '-' + m2 + '-' + d2;
+      }
+    }
+  }
+
+  // 2. Format garis miring: 22/09/2026 atau 2026/09/22
+  if (str.indexOf('/') !== -1) {
+    var partsSlash = str.split(' ')[0].split('/');
+    if (partsSlash.length === 3) {
+      if (partsSlash[2].length === 4) {
+        var d3 = partsSlash[0].length === 1 ? '0' + partsSlash[0] : partsSlash[0];
+        var m3 = partsSlash[1].length === 1 ? '0' + partsSlash[1] : partsSlash[1];
+        var y3 = partsSlash[2];
+        return y3 + '-' + m3 + '-' + d3;
+      }
+      if (partsSlash[0].length === 4) {
+        var y4 = partsSlash[0];
+        var m4 = partsSlash[1].length === 1 ? '0' + partsSlash[1] : partsSlash[1];
+        var d4 = partsSlash[2].length === 1 ? '0' + partsSlash[2] : partsSlash[2];
+        return y4 + '-' + m4 + '-' + d4;
+      }
+    }
+  }
+
+  // 3. Fallback konstruktor Date
+  var parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    var pYr = parsed.getFullYear();
+    var pMo = (parsed.getMonth() + 1 < 10 ? '0' : '') + (parsed.getMonth() + 1);
+    var pDa = (parsed.getDate() < 10 ? '0' : '') + parsed.getDate();
+    return pYr + '-' + pMo + '-' + pDa;
+  }
+  return '';
+}
+
 function extractDayHeight(day) {
   if (!day) return '';
   var candidates = [day.heightCm, day.height, day.tinggi, day.tinggiCm, day.tinggi_cm, day.height_cm];
@@ -839,7 +904,7 @@ function saveGroupJournal(groupId, days) {
       const condition = day.condition || '';
       const emoji = day.conditionEmoji || '';
       const notes = day.notes || '';
-      const dateVal = day.date || '';
+      const dateVal = formatDateToYMD(day.date) || day.date || '';
       const status = height !== '' ? 'Lengkap ⭐ (' + height + ' cm)' : (condition ? 'Tercatat' : 'Belum diisi');
 
       let rowData;
@@ -931,7 +996,7 @@ function readAllJournalData() {
       dayMaps[gId][dayNum] = {
         dayNumber: dayNum,
         label: 'Hari ' + dayNum,
-        date: row[colTglIdx] ? String(row[colTglIdx]).split('T')[0] : '',
+        date: formatDateToYMD(row[colTglIdx]),
         heightCm: parsePlantHeight(row[colTinggiIdx]),
         condition: String(row[colKondisiIdx] || ''),
         conditionEmoji: String(row[colEmojiIdx] || ''),

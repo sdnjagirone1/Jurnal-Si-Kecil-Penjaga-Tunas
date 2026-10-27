@@ -2,6 +2,121 @@ import { JournalDay, LkpdData } from '../types';
 
 const STORAGE_KEY_URL = 'kangkung_gas_webapp_url';
 
+/**
+ * Normalisasi nilai tanggal dari Google Sheets / Apps Script / browser menjadi format
+ * standar 'YYYY-MM-DD' yang valid untuk input HTML5 <input type="date">.
+ */
+export function normalizeDateToYMD(rawDate: unknown): string {
+  if (rawDate === null || rawDate === undefined || rawDate === '') return '';
+
+  // 1. Jika serial date angka dari spreadsheet atau timestamp
+  if (typeof rawDate === 'number' && !isNaN(rawDate)) {
+    if (rawDate > 1000 && rawDate < 100000) {
+      // Serial date Excel/Google Sheets (hari sejak 1899-12-30)
+      const utcDays = Math.floor(rawDate - 25569);
+      const d = new Date(utcDays * 86400 * 1000);
+      if (!isNaN(d.getTime())) {
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      }
+    } else if (rawDate >= 1000000000) {
+      const ms = rawDate < 10000000000 ? rawDate * 1000 : rawDate;
+      const d = new Date(ms);
+      if (!isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      }
+    }
+  }
+
+  const str = String(rawDate).trim();
+  if (!str) return '';
+
+  // 2. Format standar ISO: YYYY-MM-DD (e.g. "2026-09-22" atau "2026-09-22T08:00:00...")
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const y = isoMatch[1];
+    const m = isoMatch[2].padStart(2, '0');
+    const d = isoMatch[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // 3. Format umum Indonesia/Spreadsheet: DD/MM/YYYY atau DD-MM-YYYY (e.g. "22/09/2026")
+  const dmyMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmyMatch) {
+    const d = dmyMatch[1].padStart(2, '0');
+    const m = dmyMatch[2].padStart(2, '0');
+    const y = dmyMatch[3];
+    return `${y}-${m}-${d}`;
+  }
+
+  // 4. Format slashed: YYYY/MM/DD (e.g. "2026/09/22")
+  const ymdMatch = str.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = ymdMatch[2].padStart(2, '0');
+    const d = ymdMatch[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // 5. String tanggal dengan nama bulan (termasuk yang terpotong split('T')[0] seperti "Tue Sep 22 2026 00:00:00 GM")
+  const monthMap: Record<string, string> = {
+    jan: '01', januari: '01', january: '01',
+    feb: '02', februari: '02', february: '02',
+    mar: '03', maret: '03', march: '03',
+    apr: '04', april: '04',
+    mei: '05', may: '05',
+    jun: '06', juni: '06', june: '06',
+    jul: '07', juli: '07', july: '07',
+    agu: '08', agustus: '08', aug: '08', august: '08',
+    sep: '09', september: '09',
+    okt: '10', oktober: '10', oct: '10', october: '10',
+    nop: '11', nov: '11', november: '11',
+    des: '12', desember: '12', dec: '12', december: '12',
+  };
+
+  const engMatch = str.match(/(?:[A-Za-z]{3,}\s+)?([A-Za-z]{3,})\s+(\d{1,2}),?\s+(\d{4})/);
+  if (engMatch) {
+    const mKey = engMatch[1].toLowerCase().slice(0, 3);
+    const m = monthMap[mKey];
+    if (m) {
+      const d = engMatch[2].padStart(2, '0');
+      const y = engMatch[3];
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  const dmyTextMatch = str.match(/(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})/);
+  if (dmyTextMatch) {
+    const mKey = dmyTextMatch[2].toLowerCase().slice(0, 3);
+    const m = monthMap[mKey];
+    if (m) {
+      const d = dmyTextMatch[1].padStart(2, '0');
+      const y = dmyTextMatch[3];
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  // 6. Fallback konstruktor Date bawaan
+  try {
+    const parsed = new Date(str);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  } catch {
+    // abaikan jika parsing gagal
+  }
+
+  return '';
+}
+
 function cleanJournalDays(days: JournalDay[]): JournalDay[] {
   return days.map((d) => {
     let cleanHeight: number | string = d.heightCm;
@@ -12,6 +127,7 @@ function cleanJournalDays(days: JournalDay[]): JournalDay[] {
     }
     return {
       ...d,
+      date: normalizeDateToYMD(d.date),
       heightCm: cleanHeight,
     };
   });
@@ -270,9 +386,67 @@ export const sheetService = {
 
       const resJson = await response.json();
       if (resJson.status === 'success' && resJson.data) {
+        const rawMap = resJson.data as Record<string, JournalDay[]>;
+        const normalizedData: Record<number, JournalDay[]> = {};
+        for (let g = 1; g <= 5; g++) {
+          const list = rawMap[g] || (rawMap as Record<number, JournalDay[]>)[g] || [];
+          const dayMap: Record<number, JournalDay> = {};
+          if (Array.isArray(list)) {
+            list.forEach((day, idx) => {
+              if (day) {
+                const dayNum = day.dayNumber || idx + 1;
+                dayMap[dayNum] = day;
+              }
+            });
+          }
+
+          const full15: JournalDay[] = [];
+          for (let d = 1; d <= 15; d++) {
+            const day = dayMap[d];
+            if (day) {
+              let cleanHeight: number | string = day.heightCm;
+              if (typeof cleanHeight === 'string') {
+                const trimmed = cleanHeight.trim().replace(',', '.');
+                const num = parseFloat(trimmed);
+                cleanHeight = !isNaN(num) ? num : trimmed;
+              }
+              full15.push({
+                ...day,
+                dayNumber: d,
+                label: day.label || `Hari ${d}`,
+                date: normalizeDateToYMD(day.date),
+                heightCm: cleanHeight,
+                condition: day.condition || '',
+                conditionEmoji: day.conditionEmoji || '',
+                notes: day.notes || '',
+                hasNewLeaves: Boolean(day.hasNewLeaves),
+                grewTaller: Boolean(day.grewTaller),
+                greenLeaves: day.greenLeaves !== false,
+                looksFresh: day.looksFresh !== false,
+                hasYellowLeaves: Boolean(day.hasYellowLeaves),
+              });
+            } else {
+              full15.push({
+                dayNumber: d,
+                label: `Hari ${d}`,
+                date: '',
+                heightCm: '',
+                condition: '',
+                conditionEmoji: '',
+                notes: '',
+                hasNewLeaves: false,
+                grewTaller: false,
+                greenLeaves: true,
+                looksFresh: true,
+                hasYellowLeaves: false,
+              });
+            }
+          }
+          normalizedData[g] = full15;
+        }
         return {
           success: true,
-          data: resJson.data,
+          data: normalizedData,
           message: 'Berhasil mengunduh data jurnal dari Google Sheets!',
         };
       }

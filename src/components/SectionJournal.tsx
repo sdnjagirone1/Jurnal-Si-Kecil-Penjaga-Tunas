@@ -1,13 +1,16 @@
 import React, { useState } from 'react';
 import { JournalDay, GROUPS_DATA, GroupInfo } from '../types';
 import { sound } from '../utils/audio';
-import { sheetService } from '../utils/sheetService';
+import { sheetService, normalizeDateToYMD } from '../utils/sheetService';
+import { ensure15Days } from '../utils/journalUtils';
+import { PrintJournalModal } from './PrintJournalModal';
 import confetti from 'canvas-confetti';
 
 interface SectionJournalProps {
   currentGroupId: number;
   onSelectGroup: (groupId: number) => void;
   journalData: JournalDay[];
+  allGroupJournals?: Record<number, JournalDay[]>;
   onUpdateDay: (dayNumber: number, field: keyof JournalDay, value: string | number) => void;
   onLoadSample: () => void;
   onResetData: () => void;
@@ -28,12 +31,14 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
   currentGroupId,
   onSelectGroup,
   journalData,
+  allGroupJournals,
   onUpdateDay,
   onLoadSample,
   onResetData,
   onOpenSheetModal,
 }) => {
   const [activeDayPopup, setActiveDayPopup] = useState<number | null>(null);
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [saveToast, setSaveToast] = useState(false);
   const [syncingToSheet, setSyncingToSheet] = useState(false);
   const [sheetToast, setSheetToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -41,8 +46,17 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
   const activeGroup: GroupInfo =
     GROUPS_DATA.find((g) => g.id === currentGroupId) || GROUPS_DATA[0];
 
-  // Count filled days out of 15
-  const filledCount = journalData.filter(
+  // Menjamin kelompok mana pun (Kelompok 1, 2, 3, 4, 5) selalu memiliki 15 baris pengamatan
+  const effectiveJournalData = ensure15Days(
+    journalData && journalData.length > 0
+      ? journalData
+      : allGroupJournals && allGroupJournals[currentGroupId] && allGroupJournals[currentGroupId].length > 0
+      ? allGroupJournals[currentGroupId]
+      : undefined
+  );
+
+  // Hitung berapa hari yang sudah diisi tingginya
+  const filledCount = effectiveJournalData.filter(
     (d) => d.heightCm !== '' && Number(d.heightCm) > 0
   ).length;
 
@@ -56,7 +70,7 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
     setSyncingToSheet(true);
     setSheetToast(null);
 
-    const res = await sheetService.syncGroup(currentGroupId, journalData);
+    const res = await sheetService.syncGroup(currentGroupId, effectiveJournalData);
     setSyncingToSheet(false);
 
     if (res.success) {
@@ -86,7 +100,7 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
   };
 
   const handleQuickAdjust = (dayNumber: number, delta: number) => {
-    const current = Number(journalData.find((d) => d.dayNumber === dayNumber)?.heightCm) || 0;
+    const current = Number(effectiveJournalData.find((d) => d.dayNumber === dayNumber)?.heightCm) || 0;
     const nextVal = Math.max(0, parseFloat((current + delta).toFixed(1)));
     onUpdateDay(dayNumber, 'heightCm', nextVal);
     sound.playPop();
@@ -113,7 +127,7 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
     // Otomatis sinkronkan tinggi tanaman & data jurnal ke Google Sheets jika URL telah terpasang
     if (sheetService.isConfigured()) {
       setSyncingToSheet(true);
-      const res = await sheetService.syncGroup(currentGroupId, journalData);
+      const res = await sheetService.syncGroup(currentGroupId, effectiveJournalData);
       setSyncingToSheet(false);
       if (res.success) {
         setSheetToast({
@@ -148,6 +162,18 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
 
             {/* Quick Actions for Class / Demo & Cloud Sync */}
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => {
+                  sound.playStar();
+                  setIsPrintModalOpen(true);
+                }}
+                className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-2xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md active:scale-95 ring-2 ring-amber-300"
+                title="Cetak lembar jurnal pengamatan kangkung untuk dibawa ke sekolah"
+              >
+                <span>🖨️</span>
+                <span>Cetak Jurnal</span>
+              </button>
+
               <button
                 onClick={handleSyncThisGroup}
                 disabled={syncingToSheet}
@@ -289,7 +315,7 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
               <span className="text-emerald-700">{Math.round((filledCount / 15) * 100)}% Lengkap</span>
             </div>
             <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto py-1 no-scrollbar">
-              {journalData.map((d) => {
+              {effectiveJournalData.map((d) => {
                 const isFilled = d.heightCm !== '' && Number(d.heightCm) > 0;
                 return (
                   <div
@@ -320,7 +346,7 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y-2 divide-emerald-100 text-slate-800 text-sm sm:text-base">
-                {journalData.map((row, idx) => {
+                {effectiveJournalData.map((row, idx) => {
                   const isEven = idx % 2 === 0;
                   return (
                     <tr
@@ -343,7 +369,7 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
                       <td className="py-3 px-4">
                         <input
                           type="date"
-                          value={row.date}
+                          value={normalizeDateToYMD(row.date)}
                           onChange={(e) => onUpdateDay(row.dayNumber, 'date', e.target.value)}
                           className="bg-white border-2 border-emerald-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 rounded-xl px-3 py-1.5 text-xs sm:text-sm font-bold text-slate-700 w-full cursor-pointer shadow-2xs"
                         />
@@ -467,6 +493,19 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
 
             <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
               <button
+                type="button"
+                onClick={() => {
+                  sound.playStar();
+                  setIsPrintModalOpen(true);
+                }}
+                className="flex-1 sm:flex-initial px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-extrabold rounded-2xl shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 text-xs sm:text-sm font-fun"
+                title="Buka tampilan cetak untuk membawa hasil jurnal ke sekolah"
+              >
+                <span>🖨️</span>
+                <span>Cetak Jurnal</span>
+              </button>
+
+              <button
                 onClick={handleSyncThisGroup}
                 disabled={syncingToSheet}
                 className="flex-1 sm:flex-initial px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold rounded-2xl shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 text-xs sm:text-sm font-fun disabled:opacity-60"
@@ -504,6 +543,16 @@ export const SectionJournal: React.FC<SectionJournalProps> = ({
           )}
         </div>
       </div>
+
+      {/* Print Preview & Official Document Modal */}
+      <PrintJournalModal
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        currentGroupId={currentGroupId}
+        journalData={effectiveJournalData}
+        allGroupJournals={allGroupJournals}
+        onSelectGroup={onSelectGroup}
+      />
     </section>
   );
 };
